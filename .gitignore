@@ -1,0 +1,9 @@
+*.pdf
+*.png
+*.mp3
+*.csv
+checkpoint/
+documentation/
+albums/
+fma/
+*/__pycache__/
