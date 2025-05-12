@@ -8,3 +8,4 @@ albums/
 fma/
 */__pycache__/
 figures/
+*.onnx
