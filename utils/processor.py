@@ -3,36 +3,6 @@ import librosa
 import torch.nn.functional as F
 import numpy as np
 
-# id_mappings = {
-#     12: 0,
-#     15: 1,
-#     38: 2,
-#     21: 3,
-#     5: 4,
-#     17: 5,
-#     8: 6,
-#     4: 7,
-#     1235: 8,
-#     10: 9,
-#     9: 10,
-#     20: 11,
-#     14: 12,
-#     3: 13,
-#     2: 14,
-#     13: 15,
-# }
-
-id_mappings = {
-    2: 0,
-    10: 1,
-    12: 2,
-    15: 3,
-    17: 4,
-    21: 5,
-    38: 6,
-    1235: 7,
-}
-
 
 def log_mel(waveform, sample_rate=12000, hop_length=256):
     mel_spec = librosa.feature.melspectrogram(
@@ -121,11 +91,7 @@ def process_chunks(waveforms, feature_fn):
     return grouped_features
 
 
-def processor():
-    pass
-
-
-def collate_fn(batch, chunk=False, one_hot=False, resize=True):
+def collate_fn(batch, id_mappings, chunk=False, one_hot=False, resize=True):
     batch = [b for b in batch if b is not None]  # 过滤掉无效项
     if len(batch) == 0:
         return None, None, None  # 所有项都无效

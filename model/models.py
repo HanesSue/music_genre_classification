@@ -2,74 +2,87 @@ from torchvision import models
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-
-
-class ResNet18Simple(nn.Module):
-    def __init__(self, num_classes=10):
-        super(ResNet18Simple, self).__init__()
-        self.resnet = models.resnet18(pretrained=True)
-        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
-
-    def forward(self, x):
-        x = self.resnet(x)
-        return x
+from torchinfo import summary
 
 
 class ResNet18Classifier(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, freeze_resnet=True, repeat_channel=False):
         super(ResNet18Classifier, self).__init__()
+        self.repeat_channel = repeat_channel
         self.resnet = models.resnet18(weights="ResNet18_Weights.DEFAULT")
-        self.resnet.conv1 = nn.Conv2d(
-            1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
-        )
+        if not repeat_channel:
+            self.resnet.conv1 = nn.Conv2d(
+                1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
+            )
         self.resnet.fc = nn.Sequential(
-            nn.Dropout(0.5),
+            nn.Dropout(0.2),
             nn.Linear(self.resnet.fc.in_features, 256),
             nn.ReLU(inplace=True),
             nn.Dropout(0.3),
             nn.Linear(256, num_classes),
         )
 
+        if freeze_resnet:
+            for param in self.resnet.parameters():
+                param.requires_grad = False
+            for param in self.resnet.fc.parameters():
+                param.requires_grad = True
+
     def forward(self, x):
+        if self.repeat_channel:
+            x = x.repeat(1, 3, 1, 1)
         x = self.resnet(x)
         return x
 
 
 class ResNet34Classifier(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, freeze_resnet=True, repeat_channel=False):
         super(ResNet34Classifier, self).__init__()
+        self.repeat_channel = repeat_channel
         self.resnet = models.resnet34(weights="ResNet34_Weights.DEFAULT")
-
-        for param in self.resnet.parameters():
-            param.requires_grad = False
-
+        if not repeat_channel:
+            self.resnet.conv1 = nn.Conv2d(
+                1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
+            )
         self.resnet.fc = nn.Sequential(
+            nn.Dropout(0.2),
             nn.Linear(self.resnet.fc.in_features, 256),
             nn.ReLU(inplace=True),
             nn.Dropout(0.3),
             nn.Linear(256, num_classes),
         )
 
-        for param in self.resnet.fc.parameters():
-            param.requires_grad = True
+        if freeze_resnet:
+            for param in self.resnet.parameters():
+                param.requires_grad = False
+            for param in self.resnet.fc.parameters():
+                param.requires_grad = True
 
     def forward(self, x):
-        x = x.repeat(1, 3, 1, 1)
+        if self.repeat_channel:
+            x = x.repeat(1, 3, 1, 1)
         x = self.resnet(x)
         return x
 
 
 class VGG19_BN(nn.Module):
-    def __init__(self, num_classes=10, full_train=False):
+    def __init__(self, num_classes=10, full_train=False, repeat_channel=False):
         super(VGG19_BN, self).__init__()
+        self.repeat_channel = repeat_channel
         self.full_train = full_train
         self.vgg = models.vgg19_bn(weights="VGG19_BN_Weights.DEFAULT")
+        if not repeat_channel:
+            self.vgg.features[0] = nn.Conv2d(
+                1, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)
+            )
         self.vgg.classifier[-1] = nn.Linear(4096, num_classes)
         if not self.full_train:
             for param in self.vgg.features.parameters():
                 param.requires_grad = False
 
     def forward(self, x):
+        if self.repeat_channel:
+            x = x.repeat(1, 3, 1, 1)
         x = self.vgg(x)
         return x
 
@@ -86,101 +99,6 @@ class AttentionPooling(nn.Module):
         attn_weights = torch.softmax(attn_scores, dim=1)  # (B, T, 1)
         weighted = x * attn_weights  # (B, T, D)
         return weighted.sum(dim=1)  # (B, D)
-
-
-class CRNN(nn.Module):
-    def __init__(self, num_classes=10, freq=128):
-        super(CRNN, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(1, 64, kernel_size=(3, 3), padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.Dropout2d(0.2),
-            nn.Conv2d(64, 128, kernel_size=(3, 3), padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.Dropout2d(0.3),
-            nn.AdaptiveAvgPool2d((1, None)),
-        )
-
-        self.rnn = nn.LSTM(
-            input_size=128, hidden_size=64, batch_first=True, bidirectional=True
-        )
-        self.rnn_drop = nn.Dropout(0.3)
-        self.atten_pooling = AttentionPooling(input_dim=128, hidden_dim=128)
-        self.pre_drop = nn.Dropout(0.3)
-        self.fc = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, num_classes),
-        )
-
-    def forward(self, x):
-        # x: (B, 1, f, t)
-        x = self.conv(x)  # -> (B, 128, 1, t')
-        B, C, F, T = x.shape
-        x = x.permute(0, 3, 1, 2)  # -> (B, t', C, 1)
-        x = x.reshape(B, T, C * F)  # -> (B, t', input_size)
-
-        x, _ = self.rnn(x)  # -> (B, t', 128)
-        x = self.rnn_drop(x)
-        x = self.atten_pooling(x)  # -> (B, 128)
-        x = self.pre_drop(x)
-        x = self.fc(x)  # -> (B, num_classes)
-        return x
-
-
-class TemporalCNN_old(nn.Module):
-    def __init__(self, input_channels, num_classes, kernel_size=3, num_filters=32):
-        super(TemporalCNN, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv1d(
-                input_channels, num_filters, kernel_size, padding=kernel_size // 2
-            ),
-            nn.BatchNorm1d(num_filters),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Conv1d(
-                num_filters, num_filters * 2, kernel_size, padding=kernel_size // 2
-            ),
-            nn.BatchNorm1d(num_filters * 2),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Conv1d(
-                num_filters * 2, num_filters * 4, kernel_size, padding=kernel_size // 2
-            ),
-            nn.BatchNorm1d(num_filters * 4),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.AdaptiveAvgPool1d(1),
-        )
-
-        self.fc = nn.Sequential(
-            nn.Linear(num_filters * 4, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, num_classes),
-        )
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        return x
 
 
 class TemporalCNN(nn.Module):
@@ -216,20 +134,9 @@ class TemporalCNN(nn.Module):
             nn.Dropout(0.3),
             nn.Linear(128, num_classes),
         )
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        x = x.squeeze(1)
+        x = x.squeeze(1)  # 删除时间维度
         x = self.conv(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
@@ -338,7 +245,7 @@ class MultibranchLSTM(nn.Module):
 
 
 class CRNNwithResNet(nn.Module):
-    def __init__(self, num_classes=8, resnet="resnet18"):
+    def __init__(self, num_classes=8, resnet="resnet18", full_train=True):
         super(CRNNwithResNet, self).__init__()
         self.input_adaptor = nn.Conv2d(1, 3, kernel_size=(1, 1))
         if resnet == "resnet18":
@@ -371,6 +278,10 @@ class CRNNwithResNet(nn.Module):
             nn.Linear(64, num_classes),
         )  # 64 * 2 双向
 
+        if not full_train:
+            for param in self.feature_extractor.parameters():
+                param.requires_grad = False
+
     def forward(self, x):
         if x.shape[1] == 1:
             x = self.input_adaptor(x)
@@ -389,6 +300,7 @@ class CRNNwithResNet(nn.Module):
         return x
 
 
+# 该模型来自原始论文
 class DeepCRNN(nn.Module):
     def __init__(self, num_classes=8):
         super(DeepCRNN, self).__init__()
